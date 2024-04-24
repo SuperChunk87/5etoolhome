@@ -368,12 +368,24 @@ class BookUtil {
 		hdlNarrowUpdate();
 
 		if (!this._TOP_MENU) {
-			const doDownloadFullText = () => {
+			const doDownloadFullText = async () => {
+				await this.walkForImages(this.curRender.data);
+
 				DataUtil.userDownloadText(
 					`${this.curRender.fromIndex.name}.md`,
 					this.curRender.data
 						.map(chapter => RendererMarkdown.get().render(chapter))
 						.join("\n\n------\n\n"),
+				);
+			};
+
+			const doDownloadChapterText = async () => {
+				await this.walkForImages(this.curRender.data[this.curRender.chapter]);
+
+				const contentsInfo = this.curRender.fromIndex.contents[this.curRender.chapter];
+				DataUtil.userDownloadText(
+					`${this.curRender.fromIndex.name} - ${Parser.bookOrdinalToAbv(contentsInfo.ordinal).replace(/:/g, "")}${contentsInfo.name}.md`,
+					RendererMarkdown.get().render(this.curRender.data[this.curRender.chapter]),
 				);
 			};
 
@@ -383,11 +395,7 @@ class BookUtil {
 					() => {
 						if (!~BookUtil.curRender.chapter) return doDownloadFullText();
 
-						const contentsInfo = this.curRender.fromIndex.contents[this.curRender.chapter];
-						DataUtil.userDownloadText(
-							`${this.curRender.fromIndex.name} - ${Parser.bookOrdinalToAbv(contentsInfo.ordinal).replace(/:/g, "")}${contentsInfo.name}.md`,
-							RendererMarkdown.get().render(this.curRender.data[this.curRender.chapter]),
-						);
+						doDownloadChapterText();
 					},
 				),
 				new ContextUtil.Action(
@@ -928,6 +936,66 @@ class BookUtil {
 	}
 
 	static _getHrefShowAll (bookId) { return `#${UrlUtil.encodeForHash(bookId)},-1`; }
+
+	static async walkForImages (input) {
+		try {
+			if (Array.isArray(input)) {
+				for (let entry of input) {
+					if (!entry) continue;
+
+					if (Array.isArray(entry)) {
+						await this.walkForImages(entry);
+					}
+
+					if (entry.entries) {
+						await this.walkForImages(entry.entries);
+					}
+
+					if (entry.type === "image" && !entry.data?.base64) {
+						const imageUrl = Renderer.utils.getEntryMediaUrl(entry, "href", "img");
+						(entry.data ||= {}).base64 = await this._getImageDataURL(imageUrl);
+					}
+				}
+			} else {
+				if (input.entries) {
+					await this.walkForImages(input.entries);
+				}
+
+				if (input.type === "image" && !input.data?.base64) {
+					const imageUrl = Renderer.utils.getEntryMediaUrl(entry, "href", "img");
+					(entry.data ||= {}).base64 = await this._getImageDataURL(imageUrl);
+				}
+			}
+		} catch (error) {
+			JqueryUtil.doToast({
+				type: "warning",
+				content: error.message ?? error,
+			});
+		}
+	}
+
+	static async _getImageDataURL (imageUrl) {
+		const response = await fetch(imageUrl);
+		if (!response) throw new Error(`Couldn't fetch image ${imageUrl}`);
+
+		const imgBlob = await response.blob();
+		if (!imgBlob) throw new Error(`Couldn't process image ${imageUrl}`);
+
+		const fileReader = new FileReader();
+
+		return new Promise((resolve, reject) => {
+			fileReader.onloadend = () => {
+				resolve(fileReader.result);
+			};
+
+			fileReader.onerror = () => {
+				fileReader.abort();
+				reject(new Error(`Couldn't process image ${imageUrl}`));
+			};
+
+			fileReader.readAsDataURL(imageBlob);
+		});
+	}
 }
 // region Last render/etc
 BookUtil.curRender = {
